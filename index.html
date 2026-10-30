@@ -325,6 +325,7 @@ button:focus-visible{outline:3px solid var(--coral);outline-offset:3px;}
       <rect id="nightTint" x="-900" y="-900" width="2200" height="2400" fill="#1C2356" opacity="0" pointer-events="none"/>
       <g id="glowLayer" pointer-events="none"></g>
       <g id="toolLayer"></g>
+      <g id="petHand" display="none" pointer-events="none"><use href="#ic-hand" x="-32" y="-32" width="64" height="64"/></g>
       <g id="bubble" display="none" pointer-events="none">
         <g id="bubTrail"><circle cx="-30" cy="33" r="6.5" fill="#fff" stroke="#EEDCCB" stroke-width="2"/><circle cx="-41" cy="46" r="3.8" fill="#fff" stroke="#EEDCCB" stroke-width="2"/></g>
         <path d="M-27 20c-15 0-17-19-4-23-2-17 18-23 26-13 6-12 28-10 30 6 15 0 17 21 4 27-4 10-21 10-26 4-8 8-24 6-30-1z" fill="#fff" stroke="#EEDCCB" stroke-width="2.5"/>
@@ -1004,9 +1005,9 @@ function sceneToClient(x, y){
    game: the cat, the room's day/night, needs and the 5-day loop
    ===================================================================== */
 const HOME = {x:200, y:452}, BOX = {x:322, y:470}, BED = {x:318, y:372}, BOX_POOP = {x:296, y:455}, BIN = {x:378, y:384};
-const PET_NEED = 230;               // rub distance (scene units) that satisfies a pet request
+const PET_NEED = 150;               // touch amount that satisfies a pet request: ~3 taps, a 1-second hold, or a short rub
 const NEED_CAPTION = {hungry:'น้องหิวแล้ว กดปุ่มอาหารเลย', potty:'น้องปวดอึ! พาไปห้องน้ำ', clean:'เก็บอึทิ้งให้สะอาดนะ',
-  play:'น้องอยากเล่น กดปุ่มของเล่น', head:'น้องอยากให้ลูบหัว', chin:'น้องอยากให้เกาคาง'};
+  play:'น้องอยากเล่น กดปุ่มของเล่น', head:'น้องอยากให้ลูบหัว แตะตัวน้องได้เลย', chin:'น้องอยากให้เกาคาง แตะตัวน้องได้เลย'};
 const NEED_BTN = {hungry:'feed', potty:'potty', clean:'clean', play:'play', head:'pet', chin:'pet'};
 const BUB_ICON = {hungry:'#ic-fish', potty:'#ic-litter', clean:'#ic-poop', play:'#ic-feather', head:'#ic-head', chin:'#ic-chin', sleepy:'#ic-moon'};
 const DAY_PLANS = [
@@ -1250,8 +1251,7 @@ function updateNeed(dt){
   G.needAge += dt;
   if (G.needAge > G.hintAt && !cat.busy && !feed.active && !play.active){
     G.hintAt = G.needAge + 10;
-    if (G.need === 'head' || G.need === 'chin') showPetHint(G.need, 4);
-    else hintButton(NEED_BTN[G.need]);
+    hintButton(NEED_BTN[G.need]);
   }
   if (G.need === 'potty' && G.needAge > 26 && !cat.busy && !cat.hop && !cat.petting) accident();
 }
@@ -1595,26 +1595,55 @@ async function actClean(target){
   if (!poops.length && fulfill('clean')) praise('ห้องสะอาดแล้ว!');
 }
 
-/* ---------- petting ---------- */
-function actPetHint(){
-  if (cat.mode === 'sleep' || G.farewell || cat.busy) return;
+/* ---------- petting: the hand button strokes the cat, or touch the cat anywhere ---------- */
+async function actPet(){
+  if (cat.busy || cat.mode === 'sleep' || G.farewell) return;
   const z = G.need === 'chin' ? 'chin' : 'head';
-  showPetHint(z, 3.5); gesture('meow', .5); SFX.meow(isKitten(), 'happy');
-  setCaption(z === 'chin' ? 'ใช้นิ้วเกาใต้คางน้องเบาๆ' : 'ใช้นิ้วลูบหัวน้องเบาๆ');
+  cat.busy = true; hideHints(); cat.hops = [];
+  await until(() => !cat.hop);
+  cat.petting = {zone:z, dx:0, amount:0, lastHeart:G.time, x:0, y:0, auto:true};
+  cat.mode = 'pet'; cat.gesture = null; SFX.purr(true);
+  setCaption(z === 'chin' ? 'เกาคางให้น้องนะ' : 'ลูบหัวให้น้องนะ');
+  G.petHand = {zone:z, t:0, lh:0};
+  await until(() => !G.petHand || G.petHand.t > 2.2);
+  G.petHand = null; $('#petHand').setAttribute('display', 'none');
+  cat.petting = null; cat.petEnd = G.time; cat.busy = false;
+  if (fulfill(z)) praise(z === 'chin' ? 'น้องชอบให้เกาคางมาก' : 'น้องชอบให้ลูบหัว');
+  else { const h = catHead(); FX.hearts(h.x, h.y - 30, 3, 24); restoreCaption(); }
 }
+function updatePetHand(dt){
+  const ph = G.petHand; if (!ph) return;
+  ph.t += dt;
+  const h = catHead(), s = cat.s, k = cat.rig.geo.headS * s, chin = ph.zone === 'chin';
+  const sway = Math.sin(ph.t * (chin ? 10 : 7));
+  const x = h.x + sway * (chin ? 9 : 15) * s, y = chin ? h.y + 66*k : h.y - 40*k;
+  const el = $('#petHand'); el.setAttribute('display', 'inline');
+  el.setAttribute('transform', `translate(${x.toFixed(1)} ${y.toFixed(1)}) rotate(${chin ? 0 : 180}) scale(${(1.05*s).toFixed(3)})`);
+  if (cat.petting) cat.petting.dx = sway * 30;
+  if (G.need === ph.zone) setRing(ph.t / 2.2);
+  if (G.time - ph.lh > .25){ ph.lh = G.time; FX.spawn('heart', x + rand(-14, 14), y - (chin ? 40 : 6)*k, {vy:-70, vx:rand(-20, 20), life:1, size:rand(13, 19)}); }
+}
+/* one big, forgiving touch area around the whole cat */
 function catZone(p){
   const s = cat.s;
-  if (cat.mode === 'sleep'){ const dx = (p.x - cat.x)/s, dy = (p.y - cat.y)/s; return (Math.abs(dx) < 72 && dy > -72 && dy < 12) ? 'sleep' : null; }
-  const g = cat.rig.geo, P = cat.rig.P, hs = g.headS;
-  const lx = (p.x - cat.x)/s, ly = (p.y - cat.y)/s - P.lift;
-  const hx = P.headX, hy = g.headY*P.squash + P.headY;
-  const ex = (lx - hx)/(60*hs), ey = (ly - hy)/(46*hs);
-  if (ex*ex + ey*ey < 1.2 || (Math.abs(lx - hx) < 52*hs && ly < hy && ly > hy - 76*hs)) return (ly - hy) > 13*hs ? 'chin' : 'head';
-  if (Math.abs(lx - hx) < 36 && ly > hy + 30*hs && ly < hy + 60*hs) return 'chin';
-  const bs = g.bodyS;
-  if (Math.abs(lx) < 54*bs && ly < 4 && ly > -96*bs) return 'body';
-  if (lx > 28*bs && lx < 94*bs && ly < 0 && ly > -84*bs) return 'tail';
-  return null;
+  if (cat.mode === 'sleep'){ const dx = (p.x - cat.x)/s, dy = (p.y - cat.y)/s; return (Math.abs(dx) < 80 && dy > -80 && dy < 16) ? 'sleep' : null; }
+  const g = cat.rig.geo, top = g.headY - 75*g.headS;
+  const lx = (p.x - cat.x)/s, ly = (p.y - cat.y)/s - cat.rig.P.lift;
+  const ex = lx / 95, ey = (ly - top/2) / (-top/2 + 22);
+  return ex*ex + ey*ey < 1 ? 'cat' : null;
+}
+function startPetting(p, zone){
+  cat.hops = []; cat.petting = {zone, dx:0, amount:50, lastHeart:G.time, x:p.x, y:p.y};
+  cat.mode = 'pet'; cat.gesture = null; SFX.purr(true); hideHints();
+  FX.spawn('heart', p.x, p.y - 14, {vy:-70, life:1, size:16});
+  petProgress(zone);
+}
+/* holding a finger still counts too, so tapping, holding or rubbing all work */
+function updatePetting(dt){
+  const pt = cat.petting; if (!pt || pt.auto) return;
+  pt.amount += dt * 90;
+  if (G.time - pt.lastHeart > .25){ pt.lastHeart = G.time; FX.spawn('heart', pt.x + rand(-10, 10), pt.y - 16, {vy:-70, vx:rand(-20, 20), life:1, size:rand(12, 18)}); }
+  petProgress(pt.zone);
 }
 function petProgress(zone){
   const pt = cat.petting; if (!pt) return;
@@ -1641,13 +1670,8 @@ function onDown(e){
   if (pp && !scoop.active){ actClean(pp); return; }
   const z = catZone(p);
   if (z === 'sleep'){ FX.hearts(p.x, p.y - 10, 2); FX.say(p.x, p.y - 34, 'ฟี้...', '#7C8AD8', 16); return; }
-  if (z && !cat.busy){
-    if (z === 'tail'){ gesture('shake', .6); SFX.meow(isKitten(), 'short'); FX.say(p.x, p.y - 22, 'เมี้ยว!', '#FF7F6B', 18); return; }
-    cat.hops = []; cat.petting = {zone:z, dx:0, amount:40, lastHeart:G.time, x:p.x, y:p.y};
-    cat.mode = 'pet'; cat.gesture = null; SFX.purr(true); hideHints();
-    FX.spawn('heart', p.x, p.y - 14, {vy:-70, life:1, size:16});
-    petProgress(z); return;
-  }
+  const petNeed = G.need === 'head' || G.need === 'chin';
+  if ((z || petNeed) && !cat.busy){ startPetting(p, petNeed ? G.need : 'head'); return; }
   FX.spawn('sparkle', p.x, p.y, {size:16, life:.5, vr:200});
 }
 function onMove(e){
@@ -1656,12 +1680,10 @@ function onMove(e){
   if (feed.drag){ const f = feed.drag; f.moved += Math.hypot(p.x - f.lx, p.y - f.ly); f.lx = p.x; f.ly = p.y; f.x = p.x; f.y = p.y - 8; feed.lastTouch = G.time; return; }
   if (play.drag){ play.P.x = p.x; play.P.y = p.y; play.lastDrag = G.time; return; }
   const pt = cat.petting;
-  if (pt){
-    const d = Math.hypot(p.x - pt.x, p.y - pt.y); pt.x = p.x; pt.y = p.y;
-    const z = catZone(p); if (!z || z === 'tail') return;
-    pt.zone = z; pt.amount += d; pt.dx = (p.x - catHead().x) / cat.s;
-    if (G.time - pt.lastHeart > .22 && d > 1){ pt.lastHeart = G.time; FX.spawn('heart', p.x + rand(-8, 8), p.y - 14, {vy:-70, vx:rand(-20, 20), life:1, size:rand(12, 18)}); }
-    petProgress(z);
+  if (pt && !pt.auto){
+    const d = Math.min(60, Math.hypot(p.x - pt.x, p.y - pt.y)); pt.x = p.x; pt.y = p.y;
+    pt.amount += d; pt.dx = clamp((p.x - catHead().x) / cat.s, -40, 40);
+    petProgress(pt.zone);
   }
 }
 function onUp(){
@@ -1672,7 +1694,7 @@ function onUp(){
     else { const fx = f.x, fy = f.y; f.tw = true; tween(.3, k => { f.x = lerp(fx, feed.px + f.ox, k); f.y = lerp(fy, feed.py + f.oy, k); }).then(() => { f.tw = null; }); }
   }
   if (play.drag){ play.drag = false; play.lastDrag = G.time; }
-  if (cat.petting){ cat.petting = null; cat.petEnd = G.time; }
+  if (cat.petting && !cat.petting.auto){ cat.petting = null; cat.petEnd = G.time; }
 }
 
 /* ---------- hints, captions, banners, hearts ---------- */
@@ -1778,6 +1800,7 @@ function cleanupGame(){
   $$('.flyheart').forEach(el => el.remove());
   Object.assign(cat, {busy:false, mode:null, hop:null, hops:[], hopDone:null, petting:null, gesture:null, spinning:false, flip:1});
   G.need = null; needResolve = null; G.lookAt = null; G.zzz = false; G.farewell = false; G.hint = null;
+  G.petHand = null; $('#petHand').setAttribute('display', 'none');
 }
 function leaveGame(){ if (G.active){ G.active = false; G.session++; cleanupGame(); } }
 function enterGame(isNew){
@@ -1877,7 +1900,7 @@ function wireUI(){
   $('#btnReset').onclick = resetFlow;
   $$('.act').forEach(b => b.addEventListener('click', () => {
     audioInit(); hideHints(); const a = b.dataset.act;
-    if (a === 'feed') actFeed(); else if (a === 'play') actPlay(); else if (a === 'pet') actPetHint();
+    if (a === 'feed') actFeed(); else if (a === 'play') actPlay(); else if (a === 'pet') actPet();
     else if (a === 'potty') actPotty(); else if (a === 'clean') actClean();
   }));
   sceneSVG.addEventListener('pointerdown', onDown); sceneSVG.addEventListener('pointermove', onMove);
@@ -1889,7 +1912,7 @@ function wireUI(){
   document.addEventListener('contextmenu', e => e.preventDefault());
 }
 function gameUpdate(dt){
-  updateNeed(dt); updateTweens(dt); updatePlay(dt); updateFeed(); updateCat(dt); updateFriend(dt); updatePoops(dt);
+  updateNeed(dt); updateTweens(dt); updatePlay(dt); updateFeed(); updatePetting(dt); updateCat(dt); updatePetHand(dt); updateFriend(dt); updatePoops(dt);
   updateBubble(dt); updateHint(dt); FX.update(dt); updateEnv(dt); Depth.sort(); updateButtons();
   if (G.zzz){ G.zt = (G.zt || 0) - dt; if (G.zt <= 0){ G.zt = .9; const h = catHead(); FX.spawn('z', h.x + 22, h.y - 24, {vx:rand(8, 22), vy:-26, life:2, size:rand(16, 24), color:'#7C8AD8'}); } }
 }
@@ -1914,7 +1937,7 @@ function boot(data){
   bubEl = $('#bubble'); bubIcon = $('#bubIcon'); bubTrail = $('#bubTrail'); bubRing = $('#bubRing');
   initEnv(); applyGifts(); wireUI(); syncSoundUI(); refreshTitle(); showScreen('scrTitle');
   try { window.claude?.hot?.snapshot?.(() => ({S})); } catch(e){}
-  window.__meow = {S:() => S, G, cat, feed, play, poops, act:{feed:actFeed, play:actPlay, potty:actPotty, clean:actClean, pet:actPetHint}, fulfill, enterGame, catHead, catMouth};
+  window.__meow = {S:() => S, G, cat, feed, play, poops, act:{feed:actFeed, play:actPlay, potty:actPotty, clean:actClean, pet:actPet}, fulfill, enterGame, catHead, catMouth};
   requestAnimationFrame(frame);
 }
 if (window.claude?.hot?.ready) window.claude.hot.ready(boot); else boot(window.claude?.hot?.data ?? {});
